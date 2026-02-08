@@ -1,19 +1,32 @@
-import type { StyleProp, ViewStyle } from 'react-native';
+export type LifecycleEventType =
+  | 'jsReload'
+  | 'coldStart'
+  | 'appLaunch'
+  | 'inferredTermination'
+  | 'foreground'
+  | 'background'
+  | 'active'
+  | 'inactive'
+  | 'willTerminate'
+  | 'sceneActive'
+  | 'sceneInactive'
+  | 'focusActivity'
+  | 'blurActivity';
 
-export type OnLoadEventPayload = {
-  url: string;
+export type LifecycleState = 'unknown' | 'foreground' | 'background' | 'active' | 'inactive';
+
+export type LifecycleEvent = {
+  type: LifecycleEventType;
+  state: LifecycleState;
+  timestamp: number;
+  platform: 'ios' | 'android';
+  activity?: string;
+  source?: 'didFinishLaunching' | 'observerStart';
+  inferredFrom?: 'previousBackground';
+  previousBackgroundTimestamp?: number;
+  elapsedSinceBackgroundMs?: number;
 };
 
 export type ExpoAppLifecyclePlusModuleEvents = {
-  onChange: (params: ChangeEventPayload) => void;
-};
-
-export type ChangeEventPayload = {
-  value: string;
-};
-
-export type ExpoAppLifecyclePlusViewProps = {
-  url: string;
-  onLoad: (event: { nativeEvent: OnLoadEventPayload }) => void;
-  style?: StyleProp<ViewStyle>;
+  onLifecycleEvent: (event: LifecycleEvent) => void;
 };

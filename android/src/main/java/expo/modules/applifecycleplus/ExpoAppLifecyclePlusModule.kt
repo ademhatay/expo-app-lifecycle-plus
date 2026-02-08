@@ -1,50 +1,91 @@
 package expo.modules.applifecycleplus
 
+import android.app.Activity
+import android.app.Application
+import android.os.Bundle
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
-import java.net.URL
 
-class ExpoAppLifecyclePlusModule : Module() {
-  // Each module class must implement the definition function. The definition consists of components
-  // that describes the module's functionality and behavior.
-  // See https://docs.expo.dev/modules/module-api for more details about available components.
+class ExpoAppLifecyclePlusModule : Module(), DefaultLifecycleObserver, Application.ActivityLifecycleCallbacks {
+  private var didSendStartupEvents = false
+  private var currentState: String = "unknown"
+  private var application: Application? = null
+
   override fun definition() = ModuleDefinition {
-    // Sets the name of the module that JavaScript code will use to refer to the module. Takes a string as an argument.
-    // Can be inferred from module's class name, but it's recommended to set it explicitly for clarity.
-    // The module will be accessible from `requireNativeModule('ExpoAppLifecyclePlus')` in JavaScript.
     Name("ExpoAppLifecyclePlus")
 
-    // Defines constant property on the module.
-    Constant("PI") {
-      Math.PI
+    Events("onLifecycleEvent")
+
+    OnCreate {
+      ProcessLifecycleOwner.get().lifecycle.addObserver(this@ExpoAppLifecyclePlusModule)
+
+      val app = appContext.reactContext?.applicationContext as? Application
+      application = app
+      app?.registerActivityLifecycleCallbacks(this@ExpoAppLifecyclePlusModule)
     }
 
-    // Defines event names that the module can send to JavaScript.
-    Events("onChange")
-
-    // Defines a JavaScript synchronous function that runs the native code on the JavaScript thread.
-    Function("hello") {
-      "Hello world! 👋"
-    }
-
-    // Defines a JavaScript function that always returns a Promise and whose native code
-    // is by default dispatched on the different thread than the JavaScript runtime runs on.
-    AsyncFunction("setValueAsync") { value: String ->
-      // Send an event to JavaScript.
-      sendEvent("onChange", mapOf(
-        "value" to value
-      ))
-    }
-
-    // Enables the module to be used as a native view. Definition components that are accepted as part of
-    // the view definition: Prop, Events.
-    View(ExpoAppLifecyclePlusView::class) {
-      // Defines a setter for the `url` prop.
-      Prop("url") { view: ExpoAppLifecyclePlusView, url: URL ->
-        view.webView.loadUrl(url.toString())
+    OnStartObserving {
+      if (!didSendStartupEvents) {
+        didSendStartupEvents = true
+        send("jsReload")
+        send("coldStart")
       }
-      // Defines an event that the view can send to JavaScript.
-      Events("onLoad")
+    }
+
+    Function("getCurrentState") {
+      currentState
+    }
+
+    OnDestroy {
+      ProcessLifecycleOwner.get().lifecycle.removeObserver(this@ExpoAppLifecyclePlusModule)
+      application?.unregisterActivityLifecycleCallbacks(this@ExpoAppLifecyclePlusModule)
+      application = null
     }
   }
+
+  private fun send(type: String, extra: Map<String, Any?> = emptyMap()) {
+    currentState = when (type) {
+      "foreground", "active" -> "foreground"
+      "background", "inactive" -> "background"
+      else -> currentState
+    }
+
+    val payload = mutableMapOf<String, Any?>(
+      "type" to type,
+      "state" to currentState,
+      "timestamp" to System.currentTimeMillis(),
+      "platform" to "android"
+    )
+    payload.putAll(extra)
+    sendEvent("onLifecycleEvent", payload)
+  }
+
+  override fun onStart(owner: LifecycleOwner) {
+    send("foreground")
+  }
+
+  override fun onStop(owner: LifecycleOwner) {
+    send("background")
+  }
+
+  override fun onActivityResumed(activity: Activity) {
+    send("focusActivity", mapOf("activity" to activity.javaClass.simpleName))
+  }
+
+  override fun onActivityPaused(activity: Activity) {
+    send("blurActivity", mapOf("activity" to activity.javaClass.simpleName))
+  }
+
+  override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
+
+  override fun onActivityStarted(activity: Activity) {}
+
+  override fun onActivityStopped(activity: Activity) {}
+
+  override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+
+  override fun onActivityDestroyed(activity: Activity) {}
 }

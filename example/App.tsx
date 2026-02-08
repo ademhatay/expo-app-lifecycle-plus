@@ -1,37 +1,39 @@
-import { useEvent } from 'expo';
-import ExpoAppLifecyclePlus, { ExpoAppLifecyclePlusView } from 'expo-app-lifecycle-plus';
-import { Button, SafeAreaView, ScrollView, Text, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import * as Lifecycle from 'expo-app-lifecycle-plus';
+import type { LifecycleEvent } from 'expo-app-lifecycle-plus';
 
 export default function App() {
-  const onChangePayload = useEvent(ExpoAppLifecyclePlus, 'onChange');
+  const [currentState, setCurrentState] = useState(() => Lifecycle.getCurrentState());
+  const [events, setEvents] = useState<LifecycleEvent[]>([]);
+
+  useEffect(() => {
+    const sub = Lifecycle.addListener((event) => {
+      setCurrentState(event.state);
+      setEvents((prev) => [event, ...prev].slice(0, 25));
+      console.log('lifecycle', event);
+    });
+    return () => sub.remove();
+  }, []);
 
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView style={styles.container}>
-        <Text style={styles.header}>Module API Example</Text>
-        <Group name="Constants">
-          <Text>{ExpoAppLifecyclePlus.PI}</Text>
+        <Text style={styles.header}>Expo App Lifecycle Plus</Text>
+        <Group name="Current State">
+          <Text style={styles.currentState}>{currentState}</Text>
         </Group>
-        <Group name="Functions">
-          <Text>{ExpoAppLifecyclePlus.hello()}</Text>
-        </Group>
-        <Group name="Async functions">
-          <Button
-            title="Set value"
-            onPress={async () => {
-              await ExpoAppLifecyclePlus.setValueAsync('Hello from JS!');
-            }}
-          />
-        </Group>
-        <Group name="Events">
-          <Text>{onChangePayload?.value}</Text>
-        </Group>
-        <Group name="Views">
-          <ExpoAppLifecyclePlusView
-            url="https://www.example.com"
-            onLoad={({ nativeEvent: { url } }) => console.log(`Loaded: ${url}`)}
-            style={styles.view}
-          />
+        <Group name="Recent Events">
+          {events.length === 0 ? (
+            <Text style={styles.muted}>No events yet. Background/foreground the app to test.</Text>
+          ) : (
+            events.map((event, index) => (
+              <Text key={`${event.timestamp}-${index}`} style={styles.eventRow}>
+                {event.type} | {event.state} | {event.platform}
+                {event.activity ? ` | ${event.activity}` : ''}
+              </Text>
+            ))
+          )}
         </Group>
       </ScrollView>
     </SafeAreaView>
@@ -47,14 +49,14 @@ function Group(props: { name: string; children: React.ReactNode }) {
   );
 }
 
-const styles = {
+const styles = StyleSheet.create({
   header: {
-    fontSize: 30,
+    fontSize: 28,
     margin: 20,
   },
   groupHeader: {
     fontSize: 20,
-    marginBottom: 20,
+    marginBottom: 12,
   },
   group: {
     margin: 20,
@@ -66,8 +68,15 @@ const styles = {
     flex: 1,
     backgroundColor: '#eee',
   },
-  view: {
-    flex: 1,
-    height: 200,
+  currentState: {
+    fontSize: 18,
+    fontWeight: 600,
   },
-};
+  eventRow: {
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  muted: {
+    color: '#666',
+  },
+});

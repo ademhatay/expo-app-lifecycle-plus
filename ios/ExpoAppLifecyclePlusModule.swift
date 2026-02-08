@@ -1,48 +1,167 @@
 import ExpoModulesCore
+import UIKit
 
 public class ExpoAppLifecyclePlusModule: Module {
-  // Each module class must implement the definition function. The definition consists of components
-  // that describes the module's functionality and behavior.
-  // See https://docs.expo.dev/modules/module-api for more details about available components.
+  private var didSendStartupEvents = false
+  private var didSendAppLaunch = false
+  private var observers: [NSObjectProtocol] = []
+  private var currentState = "unknown"
+  private let defaults = UserDefaults.standard
+  private let pendingBackgroundKey = "expo.appLifecyclePlus.pendingBackground"
+  private let backgroundTimestampKey = "expo.appLifecyclePlus.backgroundTimestamp"
+
   public func definition() -> ModuleDefinition {
-    // Sets the name of the module that JavaScript code will use to refer to the module. Takes a string as an argument.
-    // Can be inferred from module's class name, but it's recommended to set it explicitly for clarity.
-    // The module will be accessible from `requireNativeModule('ExpoAppLifecyclePlus')` in JavaScript.
     Name("ExpoAppLifecyclePlus")
 
-    // Defines constant property on the module.
-    Constant("PI") {
-      Double.pi
+    Events("onLifecycleEvent")
+
+    OnCreate {
+      self.currentState = self.readApplicationState()
+      let center = NotificationCenter.default
+
+      self.observers.append(center.addObserver(
+        forName: UIApplication.didBecomeActiveNotification,
+        object: nil,
+        queue: .main
+      ) { _ in
+        self.clearBackgroundMarker()
+        self.send(type: "active", nextState: "active")
+      })
+
+      self.observers.append(center.addObserver(
+        forName: UIApplication.willResignActiveNotification,
+        object: nil,
+        queue: .main
+      ) { _ in self.send(type: "inactive", nextState: "inactive") })
+
+      self.observers.append(center.addObserver(
+        forName: UIApplication.willEnterForegroundNotification,
+        object: nil,
+        queue: .main
+      ) { _ in self.send(type: "foreground", nextState: "foreground") })
+
+      self.observers.append(center.addObserver(
+        forName: UIApplication.didEnterBackgroundNotification,
+        object: nil,
+        queue: .main
+      ) { _ in
+        self.markEnteredBackground()
+        self.send(type: "background", nextState: "background")
+      })
+
+      self.observers.append(center.addObserver(
+        forName: UIApplication.willTerminateNotification,
+        object: nil,
+        queue: .main
+      ) { _ in
+        self.clearBackgroundMarker()
+        self.send(type: "willTerminate")
+      })
+
+      self.observers.append(center.addObserver(
+        forName: UIApplication.didFinishLaunchingNotification,
+        object: nil,
+        queue: .main
+      ) { _ in
+        self.emitAppLaunch(source: "didFinishLaunching")
+      })
+
+      self.observers.append(center.addObserver(
+        forName: UIScene.didActivateNotification,
+        object: nil,
+        queue: .main
+      ) { _ in self.send(type: "sceneActive") })
+
+      self.observers.append(center.addObserver(
+        forName: UIScene.willDeactivateNotification,
+        object: nil,
+        queue: .main
+      ) { _ in self.send(type: "sceneInactive") })
     }
 
-    // Defines event names that the module can send to JavaScript.
-    Events("onChange")
-
-    // Defines a JavaScript synchronous function that runs the native code on the JavaScript thread.
-    Function("hello") {
-      return "Hello world! 👋"
-    }
-
-    // Defines a JavaScript function that always returns a Promise and whose native code
-    // is by default dispatched on the different thread than the JavaScript runtime runs on.
-    AsyncFunction("setValueAsync") { (value: String) in
-      // Send an event to JavaScript.
-      self.sendEvent("onChange", [
-        "value": value
-      ])
-    }
-
-    // Enables the module to be used as a native view. Definition components that are accepted as part of the
-    // view definition: Prop, Events.
-    View(ExpoAppLifecyclePlusView.self) {
-      // Defines a setter for the `url` prop.
-      Prop("url") { (view: ExpoAppLifecyclePlusView, url: URL) in
-        if view.webView.url != url {
-          view.webView.load(URLRequest(url: url))
-        }
+    OnStartObserving {
+      if !self.didSendStartupEvents {
+        self.didSendStartupEvents = true
+        self.send(type: "jsReload")
+        self.send(type: "coldStart")
+        self.emitAppLaunch(source: "observerStart")
       }
-
-      Events("onLoad")
     }
+
+    Function("getCurrentState") {
+      self.currentState
+    }
+
+    OnDestroy {
+      let center = NotificationCenter.default
+      self.observers.forEach { center.removeObserver($0) }
+      self.observers.removeAll()
+    }
+  }
+
+  private func emitAppLaunch(source: String) {
+    if didSendAppLaunch {
+      return
+    }
+    didSendAppLaunch = true
+    send(type: "appLaunch", extra: ["source": source])
+    emitInferredTerminationIfNeeded()
+  }
+
+  private func markEnteredBackground() {
+    defaults.set(true, forKey: pendingBackgroundKey)
+    defaults.set(Int(Date().timeIntervalSince1970 * 1000), forKey: backgroundTimestampKey)
+  }
+
+  private func clearBackgroundMarker() {
+    defaults.set(false, forKey: pendingBackgroundKey)
+  }
+
+  private func emitInferredTerminationIfNeeded() {
+    guard defaults.bool(forKey: pendingBackgroundKey) else {
+      return
+    }
+
+    let nowMs = Int(Date().timeIntervalSince1970 * 1000)
+    let lastBackgroundAt = defaults.integer(forKey: backgroundTimestampKey)
+    let elapsedMs = lastBackgroundAt > 0 ? nowMs - lastBackgroundAt : nil
+
+    send(
+      type: "inferredTermination",
+      extra: [
+        "inferredFrom": "previousBackground",
+        "previousBackgroundTimestamp": lastBackgroundAt > 0 ? lastBackgroundAt : nil,
+        "elapsedSinceBackgroundMs": elapsedMs
+      ]
+    )
+    clearBackgroundMarker()
+  }
+
+  private func readApplicationState() -> String {
+    switch UIApplication.shared.applicationState {
+    case .active:
+      return "active"
+    case .inactive:
+      return "inactive"
+    case .background:
+      return "background"
+    @unknown default:
+      return "unknown"
+    }
+  }
+
+  private func send(type: String, nextState: String? = nil, extra: [String: Any?] = [:]) {
+    if let nextState {
+      self.currentState = nextState
+    }
+
+    var payload: [String: Any?] = [
+      "type": type,
+      "state": self.currentState,
+      "timestamp": Int(Date().timeIntervalSince1970 * 1000),
+      "platform": "ios"
+    ]
+    extra.forEach { payload[$0.key] = $0.value }
+    sendEvent("onLifecycleEvent", payload)
   }
 }
